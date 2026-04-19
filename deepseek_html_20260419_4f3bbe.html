@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WinGo 1M · Fixed Predictor</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; }
+        body {
+            font-family: 'Segoe UI', Roboto, sans-serif;
+            background: #0f1a24;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 16px;
+            color: #eef5ff;
+        }
+        .app {
+            max-width: 480px;
+            width: 100%;
+            background: #1a2e3f;
+            border-radius: 40px;
+            padding: 28px 22px;
+            box-shadow: 0 20px 30px rgba(0,0,0,0.5);
+            border: 1px solid #3a5f7a;
+        }
+        h2 { font-weight: 600; font-size: 28px; margin-bottom: 16px; display: flex; gap: 8px; }
+        .badge-ai { background: #00d4ff; color: #000; padding: 4px 14px; border-radius: 40px; font-size: 14px; font-weight: 700; }
+        .history-box {
+            background: #0e202e;
+            border-radius: 30px;
+            padding: 18px 16px;
+            margin-bottom: 24px;
+        }
+        .history-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 6px;
+            border-bottom: 1px solid #264a60;
+        }
+        .badge { padding: 5px 16px; border-radius: 40px; font-weight: 700; text-transform: uppercase; }
+        .badge.big { background: #00c3a0; color: #000; }
+        .badge.small { background: #ff8a5c; color: #000; }
+        .btn {
+            background: #00d4ff;
+            border: none;
+            color: #000;
+            font-weight: 800;
+            font-size: 24px;
+            padding: 20px;
+            border-radius: 120px;
+            width: 100%;
+            cursor: pointer;
+            box-shadow: 0 8px 0 #00779e;
+            transition: 0.1s;
+            margin: 20px 0;
+        }
+        .btn:active { transform: translateY(4px); box-shadow: 0 4px 0 #00779e; }
+        .btn:disabled { opacity: 0.7; transform: translateY(4px); box-shadow: 0 4px 0 #00779e; }
+        .prediction-card {
+            background: #102c3f;
+            border-radius: 40px;
+            padding: 28px 18px;
+            text-align: center;
+            border: 2px solid #3f7799;
+        }
+        .result-value { font-size: 88px; font-weight: 900; margin: 10px 0; }
+        .confidence { font-size: 18px; color: #b0daf0; }
+        .status { background: #0e1e2c; border-radius: 40px; padding: 14px 20px; margin-top: 16px; color: #b1d4f0; }
+    </style>
+</head>
+<body>
+<div class="app">
+    <h2>🎯 WinGo AI <span class="badge-ai">FIXED</span></h2>
+    <p>📊 Last 10 results</p>
+    <div class="history-box" id="historyContainer">
+        <div>Loading history...</div>
+    </div>
+    <button class="btn" id="predictBtn">🔮 PREDICT NOW</button>
+    <div class="prediction-card">
+        <div>🤖 AI PREDICTION</div>
+        <div class="result-value" id="predictionResult">—</div>
+        <div class="confidence" id="confidenceMsg">Click predict</div>
+    </div>
+    <div class="status" id="statusMsg">⚡ Ready. Click to predict.</div>
+</div>
+
+<script>
+    (function(){
+        const HISTORY_URL = 'https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json';
+        
+        const historyDiv = document.getElementById('historyContainer');
+        const predictBtn = document.getElementById('predictBtn');
+        const predictionResult = document.getElementById('predictionResult');
+        const confidenceMsg = document.getElementById('confidenceMsg');
+        const statusMsg = document.getElementById('statusMsg');
+
+        let historyData = [];
+
+        // Helper: classify
+        function classify(num) {
+            const n = Number(num);
+            if (isNaN(n)) return null;
+            return (n >= 0 && n <= 4) ? 'SMALL' : 'BIG';
+        }
+
+        // Fetch history
+        async function fetchHistory() {
+            try {
+                const res = await fetch(HISTORY_URL);
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                let list = [];
+                if (Array.isArray(data)) list = data;
+                else if (data.list) list = data.list;
+                else if (data.data?.list) list = data.data.list;
+                else if (data.result) list = data.result;
+                
+                const parsed = list.slice(0, 10).map(item => {
+                    const num = item?.number ?? item?.resultNumber ?? item?.lotteryNumber;
+                    if (num === undefined || num === null) return null;
+                    return {
+                        number: Number(num),
+                        bigSmall: classify(num)
+                    };
+                }).filter(item => item !== null && item.bigSmall !== null);
+                return parsed;
+            } catch (e) {
+                console.error('Fetch error:', e);
+                throw e;
+            }
+        }
+
+        function renderHistory(history) {
+            if (!history.length) {
+                historyDiv.innerHTML = '<div>No history data</div>';
+                return;
+            }
+            let html = '';
+            history.slice(0, 10).forEach((item, i) => {
+                const cls = item.bigSmall === 'BIG' ? 'big' : 'small';
+                html += `<div class="history-item">
+                    <span>#${i+1}</span>
+                    <span>🔢 ${item.number}</span>
+                    <span class="badge ${cls}">${item.bigSmall}</span>
+                </div>`;
+            });
+            historyDiv.innerHTML = html;
+        }
+
+        // Simple frequency-based fallback
+        function frequencyPredict(history) {
+            if (history.length < 3) return { result: 'SMALL', confidence: 0.5 };
+            const recent = history.slice(-5);
+            const bigCount = recent.filter(h => h.bigSmall === 'BIG').length;
+            const result = bigCount >= 3 ? 'BIG' : 'SMALL';
+            return { result, confidence: 0.65 };
+        }
+
+        // TensorFlow model training + prediction
+        async function aiPredict(history) {
+            if (history.length < 6) {
+                return frequencyPredict(history);
+            }
+            const values = history.map(h => h.bigSmall === 'BIG' ? 1 : 0);
+            const lookback = 5;
+            const X = [], Y = [];
+            for (let i = lookback; i < values.length; i++) {
+                X.push(values.slice(i - lookback, i));
+                Y.push(values[i]);
+            }
+            if (X.length === 0) return frequencyPredict(history);
+
+            const xs = tf.tensor2d(X);
+            const ys = tf.tensor2d(Y, [Y.length, 1]);
+
+            const model = tf.sequential();
+            model.add(tf.layers.dense({ units: 10, activation: 'relu', inputShape: [lookback] }));
+            model.add(tf.layers.dense({ units: 6, activation: 'relu' }));
+            model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
+            model.compile({ optimizer: tf.train.adam(0.02), loss: 'binaryCrossentropy' });
+
+            await model.fit(xs, ys, { epochs: 25, batchSize: 4, verbose: 0 });
+
+            const lastSeq = values.slice(-lookback);
+            const input = tf.tensor2d([lastSeq]);
+            const pred = model.predict(input);
+            const prob = pred.dataSync()[0];
+            
+            xs.dispose(); ys.dispose(); input.dispose(); pred.dispose(); model.dispose();
+            
+            const result = prob >= 0.5 ? 'BIG' : 'SMALL';
+            const confidence = prob >= 0.5 ? prob : (1 - prob);
+            return { result, confidence };
+        }
+
+        async function handlePredict() {
+            predictBtn.disabled = true;
+            predictionResult.textContent = '...';
+            confidenceMsg.textContent = 'Training AI...';
+            statusMsg.innerHTML = '🔄 Fetching data & training...';
+            
+            try {
+                const history = await fetchHistory();
+                historyData = history;
+                renderHistory(history);
+                
+                if (history.length < 3) {
+                    statusMsg.innerHTML = '⚠️ Not enough history. Need at least 3 results.';
+                    predictionResult.textContent = '—';
+                    confidenceMsg.textContent = 'Insufficient data';
+                    predictBtn.disabled = false;
+                    return;
+                }
+                
+                // Try AI, fallback to frequency
+                let result, confidence;
+                try {
+                    const ai = await aiPredict(history);
+                    result = ai.result;
+                    confidence = ai.confidence;
+                    statusMsg.innerHTML = `✅ AI prediction ready.`;
+                } catch (aiErr) {
+                    console.warn('AI failed, using frequency fallback', aiErr);
+                    const fb = frequencyPredict(history);
+                    result = fb.result;
+                    confidence = fb.confidence;
+                    statusMsg.innerHTML = `⚠️ AI error, using statistical fallback.`;
+                }
+                
+                predictionResult.textContent = result;
+                confidenceMsg.textContent = `Confidence: ${(confidence * 100).toFixed(1)}%`;
+                
+            } catch (err) {
+                console.error(err);
+                predictionResult.textContent = 'ERR';
+                confidenceMsg.textContent = 'Could not fetch data';
+                statusMsg.innerHTML = '❌ API unreachable. Check connection/CORS.';
+            } finally {
+                predictBtn.disabled = false;
+            }
+        }
+
+        // Initial load
+        (async function init() {
+            try {
+                const hist = await fetchHistory();
+                historyData = hist;
+                renderHistory(hist);
+                statusMsg.innerHTML = '✅ History loaded. Click PREDICT.';
+            } catch (e) {
+                historyDiv.innerHTML = '<div>Failed to load history. Check console.</div>';
+                statusMsg.innerHTML = '❌ API error.';
+            }
+            predictBtn.addEventListener('click', handlePredict);
+        })();
+
+    })();
+</script>
+</body>
+</html>
